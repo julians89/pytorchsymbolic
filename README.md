@@ -19,6 +19,10 @@ sp = SymPyModule(z, init_vals={'x': 3, 'y': 1})
 sp(t=2)
 ```
 
-will return: tensor(5.7192, grad_fn=<AddBackward0>)
+leads to:
+
+```python
+tensor(5.7192, grad_fn=<AddBackward0>)
+```
 
 Symbols that are given in 'init_vals' dict are initialized as trainable variables. All not given as initial variables will be expected to be passed at runtime.
