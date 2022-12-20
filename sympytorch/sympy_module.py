@@ -1,14 +1,12 @@
-import collections as co
-import functools as ft
 import sympy
 import torch
-
+import numpy as np
+import functools as ft
 
 def _reduce(fn):
     def fn_(*args):
         return ft.reduce(fn, args)
     return fn_
-
 
 _global_func_lookup = {
     sympy.Mul: _reduce(torch.mul),
@@ -60,80 +58,47 @@ _global_func_lookup = {
     sympy.Trace: torch.trace,
     # Note: May raise error for integer matrices.
     sympy.Determinant: torch.det,
+    #sympy.core.numbers.Pi: np.pi,
+    sympy.functions.elementary.complexes.conjugate: torch.conj,
 }
 
-
 class _Node(torch.nn.Module):
-    def __init__(self, *, expr, _memodict, _func_lookup, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, expr, _memodict, _init_vals) -> None:
+        super().__init__()
 
-        self._sympy_func = expr.func
-
-        if issubclass(expr.func, sympy.Float):
-            self._value = torch.nn.Parameter(torch.tensor(float(expr)))
-            self._torch_func = lambda: self._value
+        if issubclass(expr.func, sympy.Symbol): #Symbols are converted to params OR inputs (if not given as init value)!
+            
+            self._name = str(expr)
+            try:
+                self._value = torch.nn.Parameter(torch.tensor(float(_init_vals[str(expr)])))
+                self._torch_func = lambda: self._value
+                self._args = ()
+            except KeyError:
+                self._torch_func = lambda value: value
+                self._args = ((lambda memodict: memodict[self._name]),)
+        elif issubclass(expr.func, sympy.Float):
+            self._torch_func = lambda: torch.tensor(float(expr))
             self._args = ()
         elif issubclass(expr.func, sympy.Rational):
             self.register_buffer('_numerator', torch.tensor(expr.p, dtype=torch.get_default_dtype()))
             self.register_buffer('_denominator', torch.tensor(expr.q, dtype=torch.get_default_dtype()))
             self._torch_func = lambda: self._numerator / self._denominator
             self._args = ()
-        elif issubclass(expr.func, sympy.Integer):
-            # Can get here if expr is one of the Integer special cases,
-            # e.g. NegativeOne
-            self._value = int(expr)
-            self._torch_func = lambda: self._value
+        elif issubclass(expr.func, type(sympy.pi)):
+            self._torch_func = lambda: torch.tensor(np.pi)
             self._args = ()
-        elif issubclass(expr.func, sympy.UnevaluatedExpr):
-            if len(expr.args) != 1 or not issubclass(expr.args[0].func, sympy.Float):
-                raise ValueError("UnevaluatedExpr should only be used to wrap floats.")
-            self.register_buffer('_value', torch.tensor(float(expr.args[0])))
-            self._torch_func = lambda: self._value
-            self._args = ()
-        elif issubclass(expr.func, sympy.Symbol):
-            self._name = expr.name
-            self._torch_func = lambda value: value
-            self._args = ((lambda memodict: memodict[expr.name]),)
         else:
-            self._torch_func = _func_lookup[expr.func]
+            self._torch_func = _global_func_lookup[expr.func]
             args = []
             for arg in expr.args:
                 try:
                     arg_ = _memodict[arg]
                 except KeyError:
-                    arg_ = type(self)(expr=arg, _memodict=_memodict, _func_lookup=_func_lookup, **kwargs)
+                    arg_ = type(self)(expr=arg, _memodict=_memodict, _init_vals=_init_vals)
                     _memodict[arg] = arg_
                 args.append(arg_)
             self._args = torch.nn.ModuleList(args)
 
-    def sympy(self, _memodict):
-        if issubclass(self._sympy_func, sympy.Float):
-            return self._sympy_func(self._value.item())
-        elif issubclass(self._sympy_func, sympy.UnevaluatedExpr):
-            return self._sympy_func(self._value.item())
-        elif issubclass(self._sympy_func, sympy.Integer):
-            return self._sympy_func(self._value)
-        elif issubclass(self._sympy_func, sympy.Rational):
-            if issubclass(self._sympy_func, type(sympy.S.Half)):
-                return sympy.S.Half
-            else:
-                return self._sympy_func(self._numerator.item(), self._denominator.item())
-        elif issubclass(self._sympy_func, sympy.Symbol):
-            return self._sympy_func(self._name)
-        else:
-            if issubclass(self._sympy_func, (sympy.Min, sympy.Max)):
-                evaluate = False
-            else:
-                evaluate = True
-            args = []
-            for arg in self._args:
-                try:
-                    arg_ = _memodict[arg]
-                except KeyError:
-                    arg_ = arg.sympy(_memodict)
-                    _memodict[arg] = arg_
-                args.append(arg_)
-            return self._sympy_func(*args, evaluate=evaluate)
 
     def forward(self, memodict):
         args = []
@@ -144,34 +109,19 @@ class _Node(torch.nn.Module):
                 arg_ = arg(memodict)
                 memodict[arg] = arg_
             args.append(arg_)
+        
+        
+        #print (self._torch_func)
         return self._torch_func(*args)
 
-
 class SymPyModule(torch.nn.Module):
-    def __init__(self, *, expressions, extra_funcs=None, **kwargs):
-        super().__init__(**kwargs)
+    def __init__(self, expr, init_vals) -> None:
+        super().__init__()
 
-        expressions = tuple(expressions)
-        
-        if extra_funcs is None:
-            extra_funcs = {}
-        _func_lookup = co.ChainMap(_global_func_lookup, extra_funcs)
-
-        _memodict = {}
-        self._nodes = torch.nn.ModuleList(
-            [_Node(expr=expr, _memodict=_memodict, _func_lookup=_func_lookup) for expr in expressions]
-        )
-        self._expressions_string = str(expressions)
-
-    def __repr__(self):
-        return f"{type(self).__name__}(expressions={self._expressions_string})"
-
-    def sympy(self):
-        _memodict = {}
-        return [node.sympy(_memodict) for node in self._nodes]
+        self._init_vals = init_vals
+        self._memodict = {}
+        self._node = _Node(expr=expr, _memodict=self._memodict, _init_vals=self._init_vals)
 
     def forward(self, **symbols):
-        out = [node(symbols) for node in self._nodes]
-        out = torch.broadcast_tensors(*out)
-        return torch.stack(out, dim=-1)
-
+        out = self._node(symbols)
+        return out
