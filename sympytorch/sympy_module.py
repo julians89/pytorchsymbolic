@@ -110,18 +110,20 @@ class _Node(torch.nn.Module):
                 memodict[arg] = arg_
             args.append(arg_)
         
-        
-        #print (self._torch_func)
         return self._torch_func(*args)
 
 class SymPyModule(torch.nn.Module):
-    def __init__(self, expr, init_vals) -> None:
+    def __init__(self, expressions, init_vals) -> None:
         super().__init__()
 
         self._init_vals = init_vals
         self._memodict = {}
-        self._node = _Node(expr=expr, _memodict=self._memodict, _init_vals=self._init_vals)
+
+        self._nodes = torch.nn.ModuleList(
+            [_Node(expr=expr, _memodict=self._memodict, _init_vals=self._init_vals) for expr in expressions]
+        )
 
     def forward(self, **symbols):
-        out = self._node(symbols)
-        return out
+        out = [node(symbols) for node in self._nodes]
+        out = torch.broadcast_tensors(*out)
+        return torch.stack(out, dim=-1)
