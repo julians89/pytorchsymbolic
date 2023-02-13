@@ -68,14 +68,18 @@ class _Node(torch.nn.Module):
 
         if issubclass(expr.func, sympy.Symbol): #Symbols are converted to params OR inputs (if not given as init value)!
             
-            self._name = str(expr)
             try:
+                setattr(self, str(expr), torch.nn.Parameter(torch.tensor(float(_init_vals[str(expr)]))))
+                self._torch_func = lambda: getattr(self, str(expr))
+
+                """
                 self._value = torch.nn.Parameter(torch.tensor(float(_init_vals[str(expr)])))
                 self._torch_func = lambda: self._value
+                """
                 self._args = ()
             except KeyError:
                 self._torch_func = lambda value: value
-                self._args = ((lambda memodict: memodict[self._name]),)
+                self._args = ((lambda memodict: memodict[str(expr)]),)
         elif issubclass(expr.func, sympy.Float):
             self._torch_func = lambda: torch.tensor(float(expr))
             self._args = ()
