@@ -2,11 +2,13 @@ import sympy
 import torch
 import numpy as np
 import functools as ft
+import pykeops
 
 def _reduce(fn):
     def fn_(*args):
         return ft.reduce(fn, args)
     return fn_
+
 
 _global_func_lookup = {
     sympy.Mul: _reduce(torch.mul),
@@ -60,7 +62,9 @@ _global_func_lookup = {
     sympy.Determinant: torch.det,
     #sympy.core.numbers.Pi: np.pi,
     sympy.functions.elementary.complexes.conjugate: torch.conj,
+    sympy.Mod: torch.fmod
 }
+
 
 class _Node(torch.nn.Module):
     def __init__(self, expr, _memodict, _init_vals) -> None:
