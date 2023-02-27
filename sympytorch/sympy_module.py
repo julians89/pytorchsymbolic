@@ -2,7 +2,6 @@ import sympy
 import torch
 import numpy as np
 import functools as ft
-import pykeops
 
 def _reduce(fn):
     def fn_(*args):
@@ -62,7 +61,8 @@ _global_func_lookup = {
     sympy.Determinant: torch.det,
     #sympy.core.numbers.Pi: np.pi,
     sympy.functions.elementary.complexes.conjugate: torch.conj,
-    sympy.Mod: torch.fmod
+    sympy.Mod: torch.fmod,
+    sympy.erfc: torch.erfc
 }
 
 
